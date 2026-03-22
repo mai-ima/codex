@@ -18,6 +18,7 @@ import kotlin.math.sin
 import kotlin.random.Random
 
 class RacingGameView(context: Context) : SurfaceView(context), Runnable {
+    private val rng = Random.Default
     private val holderRef: SurfaceHolder = holder
     private val prefs = context.getSharedPreferences("neon_sprint", Context.MODE_PRIVATE)
 
@@ -88,9 +89,9 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
     private var boostSpawnTimer = 1.4f
     private val stars = MutableList(80) {
         floatArrayOf(
-            Random.nextFloat() * 2f - 1f,
-            Random.nextFloat(),
-            Random.nextFloat() * 30f + 2f,
+            rng.nextFloat() * 2f - 1f,
+            rng.nextFloat(),
+            rng.nextFloat() * 30f + 2f,
         )
     }
 
@@ -115,6 +116,17 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
     private val starPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val barBgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val barFillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val overlayPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val cardFillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val cardOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val miniMapPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val markerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val centerTitlePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val centerBodyPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val leftStatPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val leftDetailPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
     init {
         isFocusable = true
@@ -139,6 +151,14 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         brakePaint.color = Color.argb(180, 255, 134, 134)
         barBgPaint.color = Color.argb(100, 255, 255, 255)
         starPaint.color = Color.WHITE
+        ringPaint.style = Paint.Style.STROKE
+        centerTitlePaint.color = Color.WHITE
+        centerTitlePaint.isFakeBoldText = true
+        centerTitlePaint.textAlign = Paint.Align.CENTER
+        centerBodyPaint.color = labelPaint.color
+        centerBodyPaint.textAlign = Paint.Align.CENTER
+        leftStatPaint.color = labelPaint.color
+        leftDetailPaint.color = Color.WHITE
         applyCoursePalette(currentCourse())
     }
 
@@ -386,11 +406,11 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         }
         if (boostSpawnTimer <= 0f && boosts.size < 4) {
             boosts += BoostRing(
-                lane = Random.nextFloat() * 2.1f - 1.05f,
-                distance = 95f + Random.nextFloat() * 45f,
-                pulse = Random.nextFloat() * 6f,
+                lane = rng.nextFloat() * 2.1f - 1.05f,
+                distance = 95f + rng.nextFloat() * 45f,
+                pulse = rng.nextFloat() * 6f,
             )
-            boostSpawnTimer = 2.1f + Random.nextFloat() * 1.8f
+            boostSpawnTimer = 2.1f + rng.nextFloat() * 1.8f
         }
 
         updateTraffic(delta, course)
@@ -404,23 +424,23 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         stars.forEach { star ->
             star[2] -= courseFactor * delta
             if (star[2] < 1f) {
-                star[0] = Random.nextFloat() * 2f - 1f
-                star[1] = Random.nextFloat()
-                star[2] = Random.nextFloat() * 30f + 12f
+                star[0] = rng.nextFloat() * 2f - 1f
+                star[1] = rng.nextFloat()
+                star[2] = rng.nextFloat() * 30f + 12f
             }
         }
     }
 
     private fun spawnOpponent(playerSpec: CarSpec, course: CourseSpec) {
         if (opponents.size >= 8) return
-        val spec = garage.random()
-        val lane = listOf(-1f, 0f, 1f).random() + Random.nextFloat() * 0.14f - 0.07f
+        val spec = garage[rng.nextInt(garage.size)]
+        val lane = laneBaseChoices[rng.nextInt(laneBaseChoices.size)] + rng.nextFloat() * 0.14f - 0.07f
         if (opponents.count { abs(it.lane - lane) < 0.24f && it.distance > 58f } >= 2) return
         opponents += OpponentCar(
             lane = lane,
-            distance = 88f + Random.nextFloat() * 60f,
-            speed = playerSpec.topSpeed * (0.38f + Random.nextFloat() * 0.28f) / course.dragMultiplier,
-            sway = Random.nextFloat() * 8f,
+            distance = 88f + rng.nextFloat() * 60f,
+            speed = playerSpec.topSpeed * (0.38f + rng.nextFloat() * 0.28f) / course.dragMultiplier,
+            sway = rng.nextFloat() * 8f,
             laneTarget = lane,
             spec = spec,
         )
@@ -431,8 +451,8 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
             val car = opponents[i]
             car.distance -= (playerSpeed - car.speed) * delta
             car.sway += delta * (0.65f + car.spec.handling)
-            if (Random.nextFloat() < 0.008f) {
-                car.laneTarget = (car.laneTarget + listOf(-0.6f, 0f, 0.6f).random()).coerceIn(-1.05f, 1.05f)
+            if (rng.nextFloat() < 0.008f) {
+                car.laneTarget = (car.laneTarget + laneShiftChoices[rng.nextInt(laneShiftChoices.size)]).coerceIn(-1.05f, 1.05f)
             }
             car.lane += (car.laneTarget - car.lane) * min(1f, delta * (0.8f + car.spec.handling))
             car.lane += sin(car.sway) * delta * 0.012f * (car.spec.drift + course.curvature)
@@ -605,13 +625,10 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         val y = projectedRoadY(boost.distance)
         val scale = projectedScale(boost.distance)
         val radius = viewportWidth * 0.11f * scale * (1f + 0.08f * sin(boost.pulse))
-        val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(110, 155, 255, 110) }
-        canvas.drawCircle(x, y - radius * 0.4f, radius * 1.25f, glow)
-        val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = max(4f, radius * 0.2f)
-            color = boostPaint.color
-        }
+        glowPaint.color = Color.argb(110, 155, 255, 110)
+        canvas.drawCircle(x, y - radius * 0.4f, radius * 1.25f, glowPaint)
+        ringPaint.strokeWidth = max(4f, radius * 0.2f)
+        ringPaint.color = boostPaint.color
         canvas.drawCircle(x, y - radius * 0.4f, radius, ringPaint)
     }
 
@@ -644,10 +661,8 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         canvas.drawRoundRect(RectF(rect.left + carWidth * 0.18f, rect.top + carHeight * 0.14f, rect.right - carWidth * 0.18f, rect.top + carHeight * 0.46f), 22f, 22f, glassPaint)
 
         if (crashFlash > 0f) {
-            val flashPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.argb((crashFlash * 160).toInt().coerceIn(0, 160), 255, 255, 255)
-            }
-            canvas.drawRoundRect(rect, 34f, 34f, flashPaint)
+            overlayPaint.color = Color.argb((crashFlash * 160).toInt().coerceIn(0, 160), 255, 255, 255)
+            canvas.drawRoundRect(rect, 34f, 34f, overlayPaint)
         }
     }
 
@@ -673,10 +688,10 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         val miniRect = RectF(viewportWidth - 190f, 272f, viewportWidth - 40f, 438f)
         canvas.drawRoundRect(miniRect, 30f, 30f, panelPaint)
         canvas.drawRoundRect(miniRect, 30f, 30f, panelStrokePaint)
-        val mapPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = currentCourse().laneColor }
-        canvas.drawLine(miniRect.centerX(), miniRect.top + 18f, miniRect.centerX(), miniRect.bottom - 18f, mapPaint)
-        val playerMarkerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = currentCar().accent }
-        canvas.drawCircle(miniRect.centerX() + playerLanePosition * 28f, miniRect.bottom - 28f, 12f, playerMarkerPaint)
+        miniMapPaint.color = currentCourse().laneColor
+        canvas.drawLine(miniRect.centerX(), miniRect.top + 18f, miniRect.centerX(), miniRect.bottom - 18f, miniMapPaint)
+        markerPaint.color = currentCar().accent
+        canvas.drawCircle(miniRect.centerX() + playerLanePosition * 28f, miniRect.bottom - 28f, 12f, markerPaint)
         opponents.take(4).forEach {
             val markerY = (miniRect.bottom - 28f - it.distance * 1.1f).coerceIn(miniRect.top + 20f, miniRect.bottom - 30f)
             canvas.drawCircle(miniRect.centerX() + it.lane * 28f, markerY, 9f, brakePaint)
@@ -696,24 +711,18 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         canvas.drawRoundRect(brakeRect, 34f, 34f, controlStrokePaint)
 
         val centerX = steeringRect.centerX() + steeringInput * steeringRect.width() * 0.34f
-        val padPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = currentCar().accent }
-        canvas.drawCircle(centerX, steeringRect.centerY(), steeringRect.height() * 0.22f, padPaint)
+        markerPaint.color = currentCar().accent
+        canvas.drawCircle(centerX, steeringRect.centerY(), steeringRect.height() * 0.22f, markerPaint)
         canvas.drawText("STEER", steeringRect.centerX(), steeringRect.top + 56f, buttonTextPaint)
         canvas.drawText("THROTTLE", throttleRect.centerX(), throttleRect.centerY() + 18f, buttonTextPaint)
         canvas.drawText("BRAKE", brakeRect.centerX(), brakeRect.centerY() + 18f, buttonTextPaint)
     }
 
     private fun drawGarage(canvas: Canvas) {
-        val titlePaint = Paint(textPaint).apply {
-            textAlign = Paint.Align.CENTER
-            textSize = viewportWidth * 0.12f
-        }
-        val subPaint = Paint(labelPaint).apply {
-            textAlign = Paint.Align.CENTER
-            textSize = viewportWidth * 0.045f
-        }
-        canvas.drawText("NEON SPRINT", viewportWidth / 2f, viewportHeight * 0.1f, titlePaint)
-        canvas.drawText("マシンとコースを選んで安定した走りを作る", viewportWidth / 2f, viewportHeight * 0.15f, subPaint)
+        centerTitlePaint.textSize = viewportWidth * 0.12f
+        centerBodyPaint.textSize = viewportWidth * 0.045f
+        canvas.drawText("NEON SPRINT", viewportWidth / 2f, viewportHeight * 0.1f, centerTitlePaint)
+        canvas.drawText("マシンとコースを選んで安定した走りを作る", viewportWidth / 2f, viewportHeight * 0.15f, centerBodyPaint)
 
         garage.forEachIndexed { index, spec ->
             val rect = garageCardRect(index)
@@ -723,26 +732,22 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
             carBodyPaint.shader = LinearGradient(carRect.left, carRect.top, carRect.right, carRect.bottom, spec.accent, spec.accentDark, Shader.TileMode.CLAMP)
             canvas.drawRoundRect(carRect, 22f, 22f, carBodyPaint)
             canvas.drawText(spec.name, rect.left + 212f, rect.top + 54f, textPaint)
-            val statsPaint = Paint(labelPaint).apply { textSize = viewportWidth * 0.026f }
-            canvas.drawText("TOP ${spec.topSpeed.toInt()}  ACC ${spec.acceleration.toInt()}  GRIP ${(spec.grip * 100).toInt()}", rect.left + 212f, rect.top + 92f, statsPaint)
+            leftStatPaint.textSize = viewportWidth * 0.026f
+            canvas.drawText("TOP ${spec.topSpeed.toInt()}  ACC ${spec.acceleration.toInt()}  GRIP ${(spec.grip * 100).toInt()}", rect.left + 212f, rect.top + 92f, leftStatPaint)
         }
 
-        val courseTitlePaint = Paint(labelPaint).apply {
-            textSize = viewportWidth * 0.034f
-            textAlign = Paint.Align.LEFT
-        }
-        canvas.drawText("COURSES", viewportWidth * 0.08f, viewportHeight * 0.67f, courseTitlePaint)
+        leftStatPaint.textSize = viewportWidth * 0.034f
+        leftStatPaint.textAlign = Paint.Align.LEFT
+        canvas.drawText("COURSES", viewportWidth * 0.08f, viewportHeight * 0.67f, leftStatPaint)
         courses.forEachIndexed { index, course ->
             val rect = courseCardRect(index)
             val active = index == selectedCourseIndex
             drawSelectableCard(canvas, rect, active, course.horizonGlow)
-            val namePaint = Paint(labelPaint).apply {
-                color = Color.WHITE
-                textSize = viewportWidth * 0.03f
-            }
-            canvas.drawText(course.name, rect.left + 24f, rect.top + 44f, namePaint)
-            val descPaint = Paint(labelPaint).apply { textSize = viewportWidth * 0.022f }
-            canvas.drawText("Grip ${(course.gripMultiplier * 100).toInt()}  Curve ${(course.curvature * 100).toInt()}", rect.left + 24f, rect.top + 78f, descPaint)
+            leftDetailPaint.textSize = viewportWidth * 0.03f
+            canvas.drawText(course.name, rect.left + 24f, rect.top + 44f, leftDetailPaint)
+            leftStatPaint.textSize = viewportWidth * 0.022f
+            leftStatPaint.textAlign = Paint.Align.LEFT
+            canvas.drawText("Grip ${(course.gripMultiplier * 100).toInt()}  Curve ${(course.curvature * 100).toInt()}", rect.left + 24f, rect.top + 78f, leftStatPaint)
         }
 
         val detailRect = RectF(viewportWidth * 0.08f, viewportHeight * 0.79f, viewportWidth * 0.92f, viewportHeight * 0.85f)
@@ -764,67 +769,57 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
     }
 
     private fun drawCrashOverlay(canvas: Canvas) {
-        val overlayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb((170 + crashFlash * 50).toInt().coerceIn(0, 220), 4, 8, 24)
-        }
+        overlayPaint.color = Color.argb((170 + crashFlash * 50).toInt().coerceIn(0, 220), 4, 8, 24)
         canvas.drawRect(0f, 0f, viewportWidth, viewportHeight, overlayPaint)
         val panel = RectF(viewportWidth * 0.1f, viewportHeight * 0.22f, viewportWidth * 0.9f, viewportHeight * 0.58f)
         canvas.drawRoundRect(panel, 40f, 40f, panelPaint)
         canvas.drawRoundRect(panel, 40f, 40f, panelStrokePaint)
 
-        val titlePaint = Paint(textPaint).apply {
-            textAlign = Paint.Align.CENTER
-            textSize = viewportWidth * 0.11f
-        }
-        val bodyPaint = Paint(labelPaint).apply {
-            textAlign = Paint.Align.CENTER
-            textSize = viewportWidth * 0.046f
-        }
-        canvas.drawText("RACE OVER", viewportWidth / 2f, panel.top + 120f, titlePaint)
-        canvas.drawText("${currentCar().name} / ${currentCourse().name}", viewportWidth / 2f, panel.top + 190f, bodyPaint)
-        canvas.drawText("SCORE ${raceScore.toInt()}", viewportWidth / 2f, panel.top + 280f, titlePaint)
-        canvas.drawText("BEST ${bestScore.toInt()}", viewportWidth / 2f, panel.top + 350f, bodyPaint)
+        centerTitlePaint.textSize = viewportWidth * 0.11f
+        centerBodyPaint.textSize = viewportWidth * 0.046f
+        canvas.drawText("RACE OVER", viewportWidth / 2f, panel.top + 120f, centerTitlePaint)
+        canvas.drawText("${currentCar().name} / ${currentCourse().name}", viewportWidth / 2f, panel.top + 190f, centerBodyPaint)
+        canvas.drawText("SCORE ${raceScore.toInt()}", viewportWidth / 2f, panel.top + 280f, centerTitlePaint)
+        canvas.drawText("BEST ${bestScore.toInt()}", viewportWidth / 2f, panel.top + 350f, centerBodyPaint)
 
         drawOverlayButton(canvas, UiButton("RETRY", RectF(viewportWidth * 0.12f, viewportHeight * 0.66f, viewportWidth * 0.88f, viewportHeight * 0.74f)), currentCar().accent)
         drawOverlayButton(canvas, UiButton("GARAGE", RectF(viewportWidth * 0.12f, viewportHeight * 0.77f, viewportWidth * 0.88f, viewportHeight * 0.85f)), currentCourse().horizonGlow)
     }
 
     private fun drawSelectableCard(canvas: Canvas, rect: RectF, active: Boolean, accent: Int) {
-        val fillPaint = Paint(panelPaint).apply {
-            color = if (active) Color.argb(220, 12, 20, 48) else Color.argb(175, 7, 10, 28)
-        }
-        val outline = Paint(panelStrokePaint).apply {
-            color = if (active) accent else panelStrokePaint.color
-            strokeWidth = if (active) 4f else 3f
-        }
-        canvas.drawRoundRect(rect, 28f, 28f, fillPaint)
-        canvas.drawRoundRect(rect, 28f, 28f, outline)
+        cardFillPaint.color = if (active) Color.argb(220, 12, 20, 48) else Color.argb(175, 7, 10, 28)
+        cardOutlinePaint.color = if (active) accent else panelStrokePaint.color
+        cardOutlinePaint.style = Paint.Style.STROKE
+        cardOutlinePaint.strokeWidth = if (active) 4f else 3f
+        canvas.drawRoundRect(rect, 28f, 28f, cardFillPaint)
+        canvas.drawRoundRect(rect, 28f, 28f, cardOutlinePaint)
     }
 
     private fun drawOverlayButton(canvas: Canvas, button: UiButton, color: Int) {
-        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader = LinearGradient(button.rect.left, button.rect.top, button.rect.right, button.rect.bottom, color, Color.rgb(21, 35, 92), Shader.TileMode.CLAMP)
-        }
-        canvas.drawRoundRect(button.rect, 34f, 34f, fill)
+        cardFillPaint.shader = LinearGradient(button.rect.left, button.rect.top, button.rect.right, button.rect.bottom, color, Color.rgb(21, 35, 92), Shader.TileMode.CLAMP)
+        canvas.drawRoundRect(button.rect, 34f, 34f, cardFillPaint)
+        cardFillPaint.shader = null
         canvas.drawText(button.label, button.rect.centerX(), button.rect.centerY() + 18f, buttonTextPaint)
     }
 
     private fun drawStatBar(canvas: Canvas, label: String, value: Float, left: Float, top: Float, width: Float, color: Int) {
         val barRect = RectF(left, top + 14f, left + width, top + 34f)
-        val labelPaintLocal = Paint(labelPaint).apply { textSize = viewportWidth * 0.024f }
-        canvas.drawText(label, left, top, labelPaintLocal)
+        leftStatPaint.textSize = viewportWidth * 0.024f
+        leftStatPaint.textAlign = Paint.Align.LEFT
+        canvas.drawText(label, left, top, leftStatPaint)
         canvas.drawRoundRect(barRect, 12f, 12f, barBgPaint)
         barFillPaint.color = color
         canvas.drawRoundRect(RectF(barRect.left, barRect.top, barRect.left + barRect.width() * value.coerceIn(0f, 1f), barRect.bottom), 12f, 12f, barFillPaint)
     }
 
     private fun drawGarageBar(canvas: Canvas, label: String, value: Float, left: Float, top: Float, width: Float, color: Int) {
-        val statPaint = Paint(labelPaint).apply { textSize = viewportWidth * 0.023f }
-        canvas.drawText(label, left, top, statPaint)
+        leftStatPaint.textSize = viewportWidth * 0.023f
+        leftStatPaint.textAlign = Paint.Align.LEFT
+        canvas.drawText(label, left, top, leftStatPaint)
         val bar = RectF(left, top + 12f, left + width, top + 28f)
         canvas.drawRoundRect(bar, 10f, 10f, barBgPaint)
-        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color }
-        canvas.drawRoundRect(RectF(bar.left, bar.top, bar.left + bar.width() * value.coerceIn(0f, 1f), bar.bottom), 10f, 10f, fill)
+        barFillPaint.color = color
+        canvas.drawRoundRect(RectF(bar.left, bar.top, bar.left + bar.width() * value.coerceIn(0f, 1f), bar.bottom), 10f, 10f, barFillPaint)
     }
 
     private fun garageCardRect(index: Int): RectF {
@@ -896,5 +891,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
 
     private companion object {
         val laneOffsets = floatArrayOf(-0.34f, 0.34f)
+        val laneBaseChoices = floatArrayOf(-1f, 0f, 1f)
+        val laneShiftChoices = floatArrayOf(-0.6f, 0f, 0.6f)
     }
 }
