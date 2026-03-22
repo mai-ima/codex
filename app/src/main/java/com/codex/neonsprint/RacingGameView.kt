@@ -3,11 +3,9 @@ package com.codex.neonsprint
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
-import android.graphics.Shader
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -21,13 +19,15 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
     private val rng = Random.Default
     private val holderRef: SurfaceHolder = holder
     private val prefs = context.getSharedPreferences("neon_sprint", Context.MODE_PRIVATE)
+    private val shaderCache = ShaderCache()
+    private val audioController = AudioController()
 
     @Volatile
     private var running = false
     private var gameThread: Thread? = null
     private var lastFrameTime = System.nanoTime()
 
-    private enum class ScreenState { GARAGE, RACING, CRASHED }
+    private enum class ScreenState { GARAGE, OPTIONS, RACING, CRASHED }
 
     private data class OpponentCar(
         var lane: Float,
@@ -51,6 +51,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
 
     private val garage = neonGarage
     private val courses = neonCourses
+    private var options = GameOptions.load(prefs)
     private var selectedCarIndex = prefs.getInt("selected_car_index", 0).coerceIn(0, garage.lastIndex)
     private var selectedCourseIndex = prefs.getInt("selected_course_index", 0).coerceIn(0, courses.lastIndex)
     private var bestScore = prefs.getFloat("best_score", 0f)
@@ -87,7 +88,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
     private val boosts = mutableListOf<BoostRing>()
     private var opponentSpawnTimer = 0f
     private var boostSpawnTimer = 1.4f
-    private val stars = MutableList(80) {
+    private val stars = MutableList(96) {
         floatArrayOf(
             rng.nextFloat() * 2f - 1f,
             rng.nextFloat(),
@@ -159,6 +160,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         centerBodyPaint.textAlign = Paint.Align.CENTER
         leftStatPaint.color = labelPaint.color
         leftDetailPaint.color = Color.WHITE
+        audioController.applyOptions(options)
         applyCoursePalette(currentCourse())
     }
 
@@ -168,8 +170,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
             val now = System.nanoTime()
             val rawDelta = ((now - lastFrameTime) / 1_000_000_000f).coerceAtMost(0.033f)
             lastFrameTime = now
-            val delta = rawDelta.coerceAtLeast(0.001f)
-            update(delta)
+            update(rawDelta.coerceAtLeast(0.001f))
             drawFrame(holderRef.lockCanvas())
         }
     }
@@ -178,6 +179,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         if (running) return
         running = true
         lastFrameTime = System.nanoTime()
+        audioController.applyOptions(options)
         gameThread = Thread(this).also { it.start() }
     }
 
@@ -189,6 +191,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
             Thread.currentThread().interrupt()
         }
         gameThread = null
+        audioController.release()
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -210,6 +213,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         val y = event.getY(index)
         when (state) {
             ScreenState.GARAGE -> if (handleGarageTap(x, y)) return
+            ScreenState.OPTIONS -> if (handleOptionsTap(x, y)) return
             ScreenState.CRASHED -> if (handleCrashTap(x, y)) return
             ScreenState.RACING -> {
                 if (x < viewportWidth * 0.55f && steeringTouchId == -1) {
@@ -263,11 +267,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         throttleInput = 0f
         brakeInput = 0f
         if (x < viewportWidth * 0.55f) return
-        if (y < viewportHeight * 0.72f) {
-            throttleInput = 1f
-        } else {
-            brakeInput = 1f
-        }
+        if (y < viewportHeight * 0.72f) throttleInput = 1f else brakeInput = 1f
     }
 
     private fun handleGarageTap(x: Float, y: Float): Boolean {
@@ -275,6 +275,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
             if (garageCardRect(index).contains(x, y)) {
                 selectedCarIndex = index
                 prefs.edit().putInt("selected_car_index", selectedCarIndex).apply()
+                audioController.playMenu()
                 return true
             }
         }
@@ -282,28 +283,82 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
             if (courseCardRect(index).contains(x, y)) {
                 selectedCourseIndex = index
                 prefs.edit().putInt("selected_course_index", selectedCourseIndex).apply()
+                shaderCache.clear()
                 applyCoursePalette(currentCourse())
+                audioController.playMenu()
                 return true
             }
         }
-        if (startButtonRect().contains(x, y)) {
-            startRace()
-            return true
+        return when {
+            optionsButtonRect().contains(x, y) -> {
+                state = ScreenState.OPTIONS
+                audioController.playMenu()
+                true
+            }
+            startButtonRect().contains(x, y) -> {
+                audioController.playMenu()
+                startRace()
+                true
+            }
+            else -> false
         }
-        return false
+    }
+
+    private fun handleOptionsTap(x: Float, y: Float): Boolean {
+        return when {
+            graphicsOptionRect().contains(x, y) -> {
+                options = options.nextGraphicsQuality()
+                persistOptions()
+                true
+            }
+            shaderCacheOptionRect().contains(x, y) -> {
+                options = options.toggleShaderCache()
+                shaderCache.clear()
+                persistOptions()
+                true
+            }
+            soundOptionRect().contains(x, y) -> {
+                options = options.toggleSound()
+                persistOptions()
+                true
+            }
+            volumeOptionRect().contains(x, y) -> {
+                options = options.nextVolumeStep()
+                persistOptions()
+                true
+            }
+            optionsBackButtonRect().contains(x, y) -> {
+                state = ScreenState.GARAGE
+                audioController.playMenu()
+                true
+            }
+            else -> false
+        }
+    }
+
+    private fun persistOptions() {
+        options.save(prefs)
+        audioController.applyOptions(options)
+        shaderCache.clear()
+        audioController.playMenu()
     }
 
     private fun handleCrashTap(x: Float, y: Float): Boolean {
-        val retry = RectF(viewportWidth * 0.12f, viewportHeight * 0.66f, viewportWidth * 0.88f, viewportHeight * 0.74f)
-        val garageRect = RectF(viewportWidth * 0.12f, viewportHeight * 0.77f, viewportWidth * 0.88f, viewportHeight * 0.85f)
         return when {
-            retry.contains(x, y) -> {
+            retryButtonRect().contains(x, y) -> {
+                audioController.playMenu()
                 startRace(); true
             }
-            garageRect.contains(x, y) -> {
+            garageButtonRect().contains(x, y) -> {
                 state = ScreenState.GARAGE
                 crashFlash = 0f
                 clearTouchControls()
+                audioController.playMenu()
+                true
+            }
+            crashOptionsButtonRect().contains(x, y) -> {
+                state = ScreenState.OPTIONS
+                audioController.playMenu()
                 true
             }
             else -> false
@@ -312,11 +367,12 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
 
     private fun startRace() {
         state = ScreenState.RACING
+        audioController.applyOptions(options)
         applyCoursePalette(currentCourse())
         playerLanePosition = 0f
         playerVelocityX = 0f
         playerHeading = 0f
-        playerSpeed = garage[selectedCarIndex].topSpeed * 0.24f
+        playerSpeed = currentCar().topSpeed * 0.24f
         engineRpm = 2200f
         nitroCharge = 0.35f
         distanceTravelled = 0f
@@ -384,8 +440,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         playerVelocityX *= (1f - min(0.86f, delta * (2.75f - spec.drift * 0.7f)))
         playerLanePosition = safeValue(playerLanePosition + (playerVelocityX + roadCurve * 0.7f) * delta).coerceIn(-1.85f, 1.85f)
 
-        val roadEdge = 1.30f
-        if (abs(playerLanePosition) > roadEdge) {
+        if (abs(playerLanePosition) > 1.30f) {
             playerSpeed *= 1f - min(0.32f, delta * (2.5f + course.dragMultiplier))
             playerVelocityX *= 0.92f
             if (abs(playerLanePosition) > 1.62f) {
@@ -404,7 +459,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
             spawnOpponent(spec, course)
             opponentSpawnTimer = max(0.34f, 1.08f - playerSpeed / max(1f, spec.topSpeed) * 0.42f)
         }
-        if (boostSpawnTimer <= 0f && boosts.size < 4) {
+        if (boostSpawnTimer <= 0f && boosts.size < options.graphicsQuality.maxBoosts) {
             boosts += BoostRing(
                 lane = rng.nextFloat() * 2.1f - 1.05f,
                 distance = 95f + rng.nextFloat() * 45f,
@@ -420,9 +475,11 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
     }
 
     private fun updateStars(delta: Float) {
-        val courseFactor = if (state == ScreenState.RACING) max(0.7f, playerSpeed * 0.18f) else 0.7f
-        stars.forEach { star ->
-            star[2] -= courseFactor * delta
+        val movement = if (state == ScreenState.RACING) max(0.7f, playerSpeed * 0.18f) else 0.7f
+        val activeStars = min(options.graphicsQuality.starCount, stars.size)
+        for (index in 0 until activeStars) {
+            val star = stars[index]
+            star[2] -= movement * delta
             if (star[2] < 1f) {
                 star[0] = rng.nextFloat() * 2f - 1f
                 star[1] = rng.nextFloat()
@@ -432,7 +489,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
     }
 
     private fun spawnOpponent(playerSpec: CarSpec, course: CourseSpec) {
-        if (opponents.size >= 8) return
+        if (opponents.size >= options.graphicsQuality.maxOpponents) return
         val spec = garage[rng.nextInt(garage.size)]
         val lane = laneBaseChoices[rng.nextInt(laneBaseChoices.size)] + rng.nextFloat() * 0.14f - 0.07f
         if (opponents.count { abs(it.lane - lane) < 0.24f && it.distance > 58f } >= 2) return
@@ -493,14 +550,19 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
                 nitroCharge = min(1f, nitroCharge + 0.34f)
                 playerSpeed = min(spec.topSpeed, playerSpeed + 8f)
                 raceScore += 140f
+                audioController.playBoost()
                 boosts.removeAt(i)
             }
         }
     }
 
     private fun trimObjects() {
-        if (opponents.size > 8) opponents.subList(8, opponents.size).clear()
-        if (boosts.size > 5) boosts.subList(5, boosts.size).clear()
+        if (opponents.size > options.graphicsQuality.maxOpponents) {
+            opponents.subList(options.graphicsQuality.maxOpponents, opponents.size).clear()
+        }
+        if (boosts.size > options.graphicsQuality.maxBoosts) {
+            boosts.subList(options.graphicsQuality.maxBoosts, boosts.size).clear()
+        }
     }
 
     private fun onCrash() {
@@ -513,6 +575,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
             .apply()
         clearTouchControls()
         crashFlash = 1f
+        audioController.playCrash()
         state = ScreenState.CRASHED
     }
 
@@ -522,6 +585,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
             drawBackground(canvas)
             when (state) {
                 ScreenState.GARAGE -> drawGarage(canvas)
+                ScreenState.OPTIONS -> drawOptions(canvas)
                 ScreenState.RACING -> {
                     drawTrack(canvas)
                     drawWorldObjects(canvas)
@@ -544,29 +608,32 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
 
     private fun drawBackground(canvas: Canvas) {
         val course = currentCourse()
-        backgroundPaint.shader = LinearGradient(
-            0f,
-            0f,
-            0f,
-            viewportHeight,
-            intArrayOf(course.skyTop, course.skyBottom, Color.BLACK),
-            floatArrayOf(0f, 0.52f, 1f),
-            Shader.TileMode.CLAMP,
+        backgroundPaint.shader = shaderCache.linearGradient(
+            enabled = options.shaderCacheEnabled,
+            id = "background-${course.id}",
+            left = 0f,
+            top = 0f,
+            right = 0f,
+            bottom = viewportHeight,
+            colors = intArrayOf(course.skyTop, course.skyBottom, Color.BLACK),
+            positions = floatArrayOf(0f, 0.52f, 1f),
         )
         canvas.drawRect(0f, 0f, viewportWidth, viewportHeight, backgroundPaint)
 
-        horizonPaint.shader = LinearGradient(
-            0f,
-            horizonY - viewportHeight * 0.08f,
-            0f,
-            horizonY + viewportHeight * 0.1f,
-            course.horizonGlow,
-            Color.TRANSPARENT,
-            Shader.TileMode.CLAMP,
+        horizonPaint.shader = shaderCache.linearGradient(
+            enabled = options.shaderCacheEnabled,
+            id = "horizon-${course.id}",
+            left = 0f,
+            top = horizonY - viewportHeight * 0.08f,
+            right = 0f,
+            bottom = horizonY + viewportHeight * 0.1f,
+            colors = intArrayOf(course.horizonGlow, Color.TRANSPARENT),
         )
         canvas.drawRect(0f, horizonY - viewportHeight * 0.08f, viewportWidth, horizonY + viewportHeight * 0.1f, horizonPaint)
 
-        stars.forEach { star ->
+        val activeStars = min(options.graphicsQuality.starCount, stars.size)
+        for (index in 0 until activeStars) {
+            val star = stars[index]
             val scale = 1f / (star[2] * 0.15f)
             val x = viewportWidth * 0.5f + star[0] * viewportWidth * 0.55f * scale
             val y = horizonY * (0.2f + star[1] * 1.45f)
@@ -575,16 +642,11 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
             canvas.drawCircle(x, y, radius, starPaint)
         }
 
-        val buildingWidth = viewportWidth / 10f
-        for (i in -1..10) {
+        val buildingWidth = viewportWidth / max(6f, options.graphicsQuality.buildingCount.toFloat())
+        for (i in -1..options.graphicsQuality.buildingCount) {
             val left = i * buildingWidth - (roadAnimation * 24f % buildingWidth) + roadCurve * viewportWidth * 0.12f
             val heightFactor = 0.18f + (i.mod(4)) * 0.085f
-            canvas.drawRoundRect(
-                RectF(left, horizonY - viewportHeight * heightFactor, left + buildingWidth * 0.76f, horizonY),
-                14f,
-                14f,
-                cityPaint,
-            )
+            canvas.drawRoundRect(RectF(left, horizonY - viewportHeight * heightFactor, left + buildingWidth * 0.76f, horizonY), 14f, 14f, cityPaint)
         }
     }
 
@@ -603,14 +665,12 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         canvas.drawRect(viewportWidth * 0.09f + centerShift, roadBottomY - 8f, viewportWidth * 0.09f + centerShift + shoulderWidth, roadBottomY, shoulderPaint)
         canvas.drawRect(viewportWidth * 0.91f + centerShift - shoulderWidth, roadBottomY - 8f, viewportWidth * 0.91f + centerShift, roadBottomY, shoulderPaint)
 
-        for (segment in 0..15) {
+        for (segment in 0..options.graphicsQuality.roadSegments) {
             val depth = ((segment + roadAnimation) % 16f) / 3.4f + 0.35f
             val nextDepth = depth + 0.18f
             for (laneOffset in laneOffsets) {
-                val left = projectedRoadX(laneOffset, depth)
-                val leftNext = projectedRoadX(laneOffset, nextDepth)
                 lanePaint.strokeWidth = max(3f, 14f / (depth + 0.2f))
-                canvas.drawLine(left, projectedRoadY(depth), leftNext, projectedRoadY(nextDepth), lanePaint)
+                canvas.drawLine(projectedRoadX(laneOffset, depth), projectedRoadY(depth), projectedRoadX(laneOffset, nextDepth), projectedRoadY(nextDepth), lanePaint)
             }
         }
     }
@@ -640,7 +700,15 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         val height = viewportHeight * 0.17f * scale
         val rect = RectF(x - width / 2f, y - height, x + width / 2f, y)
 
-        carBodyPaint.shader = LinearGradient(rect.left, rect.top, rect.right, rect.bottom, car.spec.accent, car.spec.accentDark, Shader.TileMode.CLAMP)
+        carBodyPaint.shader = shaderCache.linearGradient(
+            enabled = options.shaderCacheEnabled,
+            id = "opponent-${car.spec.id}-${width.toInt()}-${height.toInt()}",
+            left = rect.left,
+            top = rect.top,
+            right = rect.right,
+            bottom = rect.bottom,
+            colors = intArrayOf(car.spec.accent, car.spec.accentDark),
+        )
         canvas.drawRoundRect(rect, 20f, 20f, carBodyPaint)
         glassPaint.alpha = 200
         canvas.drawRoundRect(RectF(rect.left + width * 0.18f, rect.top + height * 0.14f, rect.right - width * 0.18f, rect.top + height * 0.45f), 16f, 16f, glassPaint)
@@ -656,7 +724,15 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         val rect = RectF(x - carWidth / 2f + lean, y - carHeight, x + carWidth / 2f + lean, y)
 
         canvas.drawOval(RectF(rect.left - 24f, rect.bottom - 20f, rect.right + 24f, rect.bottom + 18f), ghostPaint)
-        carBodyPaint.shader = LinearGradient(rect.left, rect.top, rect.right, rect.bottom, spec.accent, spec.accentDark, Shader.TileMode.CLAMP)
+        carBodyPaint.shader = shaderCache.linearGradient(
+            enabled = options.shaderCacheEnabled,
+            id = "player-${spec.id}",
+            left = rect.left,
+            top = rect.top,
+            right = rect.right,
+            bottom = rect.bottom,
+            colors = intArrayOf(spec.accent, spec.accentDark),
+        )
         canvas.drawRoundRect(rect, 34f, 34f, carBodyPaint)
         canvas.drawRoundRect(RectF(rect.left + carWidth * 0.18f, rect.top + carHeight * 0.14f, rect.right - carWidth * 0.18f, rect.top + carHeight * 0.46f), 22f, 22f, glassPaint)
 
@@ -680,10 +756,10 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         canvas.drawText("BEST", viewportWidth * 0.84f, 84f, labelPaint)
         canvas.drawText(bestScore.toInt().toString(), viewportWidth * 0.84f, 142f, textPaint)
 
-        drawStatBar(canvas, "RPM", engineRpm / 8200f, 56f, 176f, viewportWidth * 0.26f, Color.rgb(113, 216, 255))
-        drawStatBar(canvas, "NITRO", nitroCharge, viewportWidth * 0.36f, 176f, viewportWidth * 0.2f, Color.rgb(162, 255, 113))
-        drawStatBar(canvas, "GRIP", currentCar().grip * currentCourse().gripMultiplier / 1.25f, viewportWidth * 0.6f, 176f, viewportWidth * 0.14f, Color.rgb(255, 158, 108))
-        drawStatBar(canvas, "CURVE", abs(roadCurve) / 0.35f, viewportWidth * 0.78f, 176f, viewportWidth * 0.12f, currentCourse().horizonGlow)
+        drawStatBar(canvas, "RPM", engineRpm / 8200f, 56f, 176f, viewportWidth * 0.22f, Color.rgb(113, 216, 255))
+        drawStatBar(canvas, "NITRO", nitroCharge, viewportWidth * 0.31f, 176f, viewportWidth * 0.18f, Color.rgb(162, 255, 113))
+        drawStatBar(canvas, "GRIP", currentCar().grip * currentCourse().gripMultiplier / 1.25f, viewportWidth * 0.54f, 176f, viewportWidth * 0.14f, Color.rgb(255, 158, 108))
+        drawStatBar(canvas, "CURVE", abs(roadCurve) / 0.35f, viewportWidth * 0.73f, 176f, viewportWidth * 0.12f, currentCourse().horizonGlow)
 
         val miniRect = RectF(viewportWidth - 190f, 272f, viewportWidth - 40f, 438f)
         canvas.drawRoundRect(miniRect, 30f, 30f, panelPaint)
@@ -692,7 +768,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         canvas.drawLine(miniRect.centerX(), miniRect.top + 18f, miniRect.centerX(), miniRect.bottom - 18f, miniMapPaint)
         markerPaint.color = currentCar().accent
         canvas.drawCircle(miniRect.centerX() + playerLanePosition * 28f, miniRect.bottom - 28f, 12f, markerPaint)
-        opponents.take(4).forEach {
+        opponents.take(options.graphicsQuality.minimapCars).forEach {
             val markerY = (miniRect.bottom - 28f - it.distance * 1.1f).coerceIn(miniRect.top + 20f, miniRect.bottom - 30f)
             canvas.drawCircle(miniRect.centerX() + it.lane * 28f, markerY, 9f, brakePaint)
         }
@@ -710,9 +786,8 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         canvas.drawRoundRect(brakeRect, 34f, 34f, controlPaint)
         canvas.drawRoundRect(brakeRect, 34f, 34f, controlStrokePaint)
 
-        val centerX = steeringRect.centerX() + steeringInput * steeringRect.width() * 0.34f
         markerPaint.color = currentCar().accent
-        canvas.drawCircle(centerX, steeringRect.centerY(), steeringRect.height() * 0.22f, markerPaint)
+        canvas.drawCircle(steeringRect.centerX() + steeringInput * steeringRect.width() * 0.34f, steeringRect.centerY(), steeringRect.height() * 0.22f, markerPaint)
         canvas.drawText("STEER", steeringRect.centerX(), steeringRect.top + 56f, buttonTextPaint)
         canvas.drawText("THROTTLE", throttleRect.centerX(), throttleRect.centerY() + 18f, buttonTextPaint)
         canvas.drawText("BRAKE", brakeRect.centerX(), brakeRect.centerY() + 18f, buttonTextPaint)
@@ -726,46 +801,69 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
 
         garage.forEachIndexed { index, spec ->
             val rect = garageCardRect(index)
-            val active = index == selectedCarIndex
-            drawSelectableCard(canvas, rect, active, spec.accent)
+            drawSelectableCard(canvas, rect, index == selectedCarIndex, spec.accent)
             val carRect = RectF(rect.left + 22f, rect.top + 18f, rect.left + 180f, rect.bottom - 18f)
-            carBodyPaint.shader = LinearGradient(carRect.left, carRect.top, carRect.right, carRect.bottom, spec.accent, spec.accentDark, Shader.TileMode.CLAMP)
+            carBodyPaint.shader = shaderCache.linearGradient(
+                enabled = options.shaderCacheEnabled,
+                id = "garage-car-${spec.id}",
+                left = carRect.left,
+                top = carRect.top,
+                right = carRect.right,
+                bottom = carRect.bottom,
+                colors = intArrayOf(spec.accent, spec.accentDark),
+            )
             canvas.drawRoundRect(carRect, 22f, 22f, carBodyPaint)
             canvas.drawText(spec.name, rect.left + 212f, rect.top + 54f, textPaint)
             leftStatPaint.textSize = viewportWidth * 0.026f
+            leftStatPaint.textAlign = Paint.Align.LEFT
             canvas.drawText("TOP ${spec.topSpeed.toInt()}  ACC ${spec.acceleration.toInt()}  GRIP ${(spec.grip * 100).toInt()}", rect.left + 212f, rect.top + 92f, leftStatPaint)
         }
 
         leftStatPaint.textSize = viewportWidth * 0.034f
-        leftStatPaint.textAlign = Paint.Align.LEFT
         canvas.drawText("COURSES", viewportWidth * 0.08f, viewportHeight * 0.67f, leftStatPaint)
         courses.forEachIndexed { index, course ->
             val rect = courseCardRect(index)
-            val active = index == selectedCourseIndex
-            drawSelectableCard(canvas, rect, active, course.horizonGlow)
+            drawSelectableCard(canvas, rect, index == selectedCourseIndex, course.horizonGlow)
             leftDetailPaint.textSize = viewportWidth * 0.03f
             canvas.drawText(course.name, rect.left + 24f, rect.top + 44f, leftDetailPaint)
             leftStatPaint.textSize = viewportWidth * 0.022f
-            leftStatPaint.textAlign = Paint.Align.LEFT
             canvas.drawText("Grip ${(course.gripMultiplier * 100).toInt()}  Curve ${(course.curvature * 100).toInt()}", rect.left + 24f, rect.top + 78f, leftStatPaint)
         }
 
         val detailRect = RectF(viewportWidth * 0.08f, viewportHeight * 0.79f, viewportWidth * 0.92f, viewportHeight * 0.85f)
         canvas.drawRoundRect(detailRect, 28f, 28f, panelPaint)
         canvas.drawRoundRect(detailRect, 28f, 28f, panelStrokePaint)
-        val spec = currentCar()
-        val course = currentCourse()
-        drawGarageBar(canvas, "Top Speed", spec.topSpeed / 110f, detailRect.left + 24f, detailRect.top + 28f, viewportWidth * 0.18f, spec.accent)
-        drawGarageBar(canvas, "Accel", spec.acceleration / 36f, detailRect.left + 230f, detailRect.top + 28f, viewportWidth * 0.14f, spec.accent)
-        drawGarageBar(canvas, "Grip", spec.grip * course.gripMultiplier / 1.25f, detailRect.left + 410f, detailRect.top + 28f, viewportWidth * 0.14f, course.horizonGlow)
-        drawGarageBar(canvas, "Curve", course.curvature / 0.35f, detailRect.left + 590f, detailRect.top + 28f, viewportWidth * 0.12f, course.shoulderColor)
+        drawGarageBar(canvas, "Top Speed", currentCar().topSpeed / 110f, detailRect.left + 24f, detailRect.top + 28f, viewportWidth * 0.18f, currentCar().accent)
+        drawGarageBar(canvas, "Accel", currentCar().acceleration / 36f, detailRect.left + 230f, detailRect.top + 28f, viewportWidth * 0.14f, currentCar().accent)
+        drawGarageBar(canvas, "Grip", currentCar().grip * currentCourse().gripMultiplier / 1.25f, detailRect.left + 410f, detailRect.top + 28f, viewportWidth * 0.14f, currentCourse().horizonGlow)
+        drawGarageBar(canvas, "Curve", currentCourse().curvature / 0.35f, detailRect.left + 590f, detailRect.top + 28f, viewportWidth * 0.12f, currentCourse().shoulderColor)
 
-        val startRect = startButtonRect()
-        val startPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader = LinearGradient(startRect.left, startRect.top, startRect.right, startRect.bottom, spec.accent, course.horizonGlow, Shader.TileMode.CLAMP)
+        drawOverlayButton(canvas, UiButton("START", startButtonRect()), currentCar().accent, currentCourse().horizonGlow)
+        drawOverlayButton(canvas, UiButton("OPTIONS", optionsButtonRect()), currentCourse().horizonGlow, currentCourse().shoulderColor)
+    }
+
+    private fun drawOptions(canvas: Canvas) {
+        centerTitlePaint.textSize = viewportWidth * 0.1f
+        centerBodyPaint.textSize = viewportWidth * 0.04f
+        canvas.drawText("OPTIONS", viewportWidth / 2f, viewportHeight * 0.12f, centerTitlePaint)
+        canvas.drawText("音声・グラフィック・シェーダー設定", viewportWidth / 2f, viewportHeight * 0.17f, centerBodyPaint)
+
+        val rows = listOf(
+            Triple(graphicsOptionRect(), "Graphics / LOD", options.graphicsQuality.label),
+            Triple(shaderCacheOptionRect(), "Shader Cache", if (options.shaderCacheEnabled) "Enabled" else "Disabled"),
+            Triple(soundOptionRect(), "Sound FX", if (options.soundEnabled) "On" else "Off"),
+            Triple(volumeOptionRect(), "Master Volume", "${options.masterVolume}%"),
+        )
+        rows.forEach { (rect, label, value) ->
+            drawSelectableCard(canvas, rect, true, currentCourse().horizonGlow)
+            leftDetailPaint.textSize = viewportWidth * 0.04f
+            leftStatPaint.textSize = viewportWidth * 0.026f
+            leftStatPaint.textAlign = Paint.Align.LEFT
+            canvas.drawText(label, rect.left + 28f, rect.top + 52f, leftDetailPaint)
+            canvas.drawText(value, rect.left + 28f, rect.top + 92f, leftStatPaint)
         }
-        canvas.drawRoundRect(startRect, 34f, 34f, startPaint)
-        canvas.drawText("START RACE", startRect.centerX(), startRect.centerY() + 18f, buttonTextPaint)
+
+        drawOverlayButton(canvas, UiButton("BACK", optionsBackButtonRect()), currentCar().accent, currentCourse().horizonGlow)
     }
 
     private fun drawCrashOverlay(canvas: Canvas) {
@@ -782,8 +880,9 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         canvas.drawText("SCORE ${raceScore.toInt()}", viewportWidth / 2f, panel.top + 280f, centerTitlePaint)
         canvas.drawText("BEST ${bestScore.toInt()}", viewportWidth / 2f, panel.top + 350f, centerBodyPaint)
 
-        drawOverlayButton(canvas, UiButton("RETRY", RectF(viewportWidth * 0.12f, viewportHeight * 0.66f, viewportWidth * 0.88f, viewportHeight * 0.74f)), currentCar().accent)
-        drawOverlayButton(canvas, UiButton("GARAGE", RectF(viewportWidth * 0.12f, viewportHeight * 0.77f, viewportWidth * 0.88f, viewportHeight * 0.85f)), currentCourse().horizonGlow)
+        drawOverlayButton(canvas, UiButton("RETRY", retryButtonRect()), currentCar().accent, currentCourse().horizonGlow)
+        drawOverlayButton(canvas, UiButton("GARAGE", garageButtonRect()), currentCourse().horizonGlow, currentCourse().shoulderColor)
+        drawOverlayButton(canvas, UiButton("OPTIONS", crashOptionsButtonRect()), currentCourse().shoulderColor, currentCourse().horizonGlow)
     }
 
     private fun drawSelectableCard(canvas: Canvas, rect: RectF, active: Boolean, accent: Int) {
@@ -795,18 +894,26 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         canvas.drawRoundRect(rect, 28f, 28f, cardOutlinePaint)
     }
 
-    private fun drawOverlayButton(canvas: Canvas, button: UiButton, color: Int) {
-        cardFillPaint.shader = LinearGradient(button.rect.left, button.rect.top, button.rect.right, button.rect.bottom, color, Color.rgb(21, 35, 92), Shader.TileMode.CLAMP)
+    private fun drawOverlayButton(canvas: Canvas, button: UiButton, startColor: Int, endColor: Int) {
+        cardFillPaint.shader = shaderCache.linearGradient(
+            enabled = options.shaderCacheEnabled,
+            id = "button-${button.label}",
+            left = button.rect.left,
+            top = button.rect.top,
+            right = button.rect.right,
+            bottom = button.rect.bottom,
+            colors = intArrayOf(startColor, endColor),
+        )
         canvas.drawRoundRect(button.rect, 34f, 34f, cardFillPaint)
         cardFillPaint.shader = null
         canvas.drawText(button.label, button.rect.centerX(), button.rect.centerY() + 18f, buttonTextPaint)
     }
 
     private fun drawStatBar(canvas: Canvas, label: String, value: Float, left: Float, top: Float, width: Float, color: Int) {
-        val barRect = RectF(left, top + 14f, left + width, top + 34f)
         leftStatPaint.textSize = viewportWidth * 0.024f
         leftStatPaint.textAlign = Paint.Align.LEFT
         canvas.drawText(label, left, top, leftStatPaint)
+        val barRect = RectF(left, top + 14f, left + width, top + 34f)
         canvas.drawRoundRect(barRect, 12f, 12f, barBgPaint)
         barFillPaint.color = color
         canvas.drawRoundRect(RectF(barRect.left, barRect.top, barRect.left + barRect.width() * value.coerceIn(0f, 1f), barRect.bottom), 12f, 12f, barFillPaint)
@@ -832,9 +939,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         val startY = viewportHeight * 0.23f
         val col = index % columns
         val row = index / columns
-        val left = startX + col * (cardWidth + gapX)
-        val top = startY + row * (cardHeight + gapY)
-        return RectF(left, top, left + cardWidth, top + cardHeight)
+        return RectF(startX + col * (cardWidth + gapX), startY + row * (cardHeight + gapY), startX + col * (cardWidth + gapX) + cardWidth, startY + row * (cardHeight + gapY) + cardHeight)
     }
 
     private fun courseCardRect(index: Int): RectF {
@@ -846,14 +951,19 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         val startY = viewportHeight * 0.69f
         val col = index % 2
         val row = index / 2
-        val left = startX + col * (width + gapX)
-        val top = startY + row * (height + gapY)
-        return RectF(left, top, left + width, top + height)
+        return RectF(startX + col * (width + gapX), startY + row * (height + gapY), startX + col * (width + gapX) + width, startY + row * (height + gapY) + height)
     }
 
-    private fun startButtonRect(): RectF {
-        return RectF(viewportWidth * 0.12f, viewportHeight * 0.89f, viewportWidth * 0.88f, viewportHeight * 0.96f)
-    }
+    private fun startButtonRect(): RectF = RectF(viewportWidth * 0.12f, viewportHeight * 0.89f, viewportWidth * 0.56f, viewportHeight * 0.96f)
+    private fun optionsButtonRect(): RectF = RectF(viewportWidth * 0.60f, viewportHeight * 0.89f, viewportWidth * 0.88f, viewportHeight * 0.96f)
+    private fun graphicsOptionRect(): RectF = RectF(viewportWidth * 0.1f, viewportHeight * 0.24f, viewportWidth * 0.9f, viewportHeight * 0.34f)
+    private fun shaderCacheOptionRect(): RectF = RectF(viewportWidth * 0.1f, viewportHeight * 0.37f, viewportWidth * 0.9f, viewportHeight * 0.47f)
+    private fun soundOptionRect(): RectF = RectF(viewportWidth * 0.1f, viewportHeight * 0.50f, viewportWidth * 0.9f, viewportHeight * 0.60f)
+    private fun volumeOptionRect(): RectF = RectF(viewportWidth * 0.1f, viewportHeight * 0.63f, viewportWidth * 0.9f, viewportHeight * 0.73f)
+    private fun optionsBackButtonRect(): RectF = RectF(viewportWidth * 0.12f, viewportHeight * 0.82f, viewportWidth * 0.88f, viewportHeight * 0.90f)
+    private fun retryButtonRect(): RectF = RectF(viewportWidth * 0.12f, viewportHeight * 0.66f, viewportWidth * 0.88f, viewportHeight * 0.74f)
+    private fun garageButtonRect(): RectF = RectF(viewportWidth * 0.12f, viewportHeight * 0.77f, viewportWidth * 0.88f, viewportHeight * 0.85f)
+    private fun crashOptionsButtonRect(): RectF = RectF(viewportWidth * 0.12f, viewportHeight * 0.88f, viewportWidth * 0.88f, viewportHeight * 0.96f)
 
     private fun projectedScale(distance: Float): Float {
         val safeDistance = max(0f, distance)
@@ -885,9 +995,7 @@ class RacingGameView(context: Context) : SurfaceView(context), Runnable {
         boostPaint.color = course.horizonGlow
     }
 
-    private fun safeValue(value: Float): Float {
-        return if (value.isFinite()) value else 0f
-    }
+    private fun safeValue(value: Float): Float = if (value.isFinite()) value else 0f
 
     private companion object {
         val laneOffsets = floatArrayOf(-0.34f, 0.34f)
