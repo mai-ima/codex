@@ -1,22 +1,25 @@
 # Neon Sprint
 
-`Neon Sprint` は Android 向けのスマホ用レースゲームです。ネオン調の3レーン道路を走り、左右タップで車線変更しながらライバル車を避け、ブーストリングで加速してスコアを伸ばします。
+`Neon Sprint` は Android 向けのスマホ用レースゲームです。複数の車種からマシンを選び、ネオン街のハイウェイを走り抜ける縦持ちレースゲームとして作り直しました。
 
-## ゲーム内容
+## 追加した内容
 
-- **プラットフォーム:** Android ネイティブアプリ
-- **操作:** 左右タップで車線変更、画面中央タップで加速
-- **ゲーム性:** エンドレスラン型のレースゲーム
-- **保存:** ベストスコアを `SharedPreferences` に保存
+- **ガレージUI:** 6種類の車から選択可能
+- **車種ごとの挙動差:** 最高速、加速、ブレーキ、グリップ、ハンドリング、ドリフト特性、重量を個別設定
+- **レースHUD:** スピード表示、RPM、ニトロ、グリップ、簡易ミニマップを追加
+- **操作UI:** 左手でステア、右手でアクセル/ブレーキを操作できるタッチUI
+- **保存:** ベストスコアと選択車種を `SharedPreferences` に保存
 
-## 主な実装
+## 実装メモ
 
 - `MainActivity` から `RacingGameView` を直接表示
-- `SurfaceView` + `Canvas` で疑似3Dの道路・敵車・ブーストリング・HUDを描画
-- タップ操作、スコア管理、速度上昇、ゲームオーバーとリスタートを実装
+- `SurfaceView` + `Canvas` で疑似3Dコース、車両、HUD、ガレージ画面を描画
+- 車両ダイナミクスは、加速・空気抵抗・横G・グリップ・ドリフト係数を考慮したカスタム実装
+- この環境では商用物理エンジンや Android SDK の導入検証ができないため、依存無しで完結する形にしています
 
-## ファイル構成
+## 主なファイル
 
+- `app/src/main/java/com/codex/neonsprint/CarSpec.kt`
 - `app/src/main/java/com/codex/neonsprint/MainActivity.kt`
 - `app/src/main/java/com/codex/neonsprint/RacingGameView.kt`
 - `app/src/main/AndroidManifest.xml`
